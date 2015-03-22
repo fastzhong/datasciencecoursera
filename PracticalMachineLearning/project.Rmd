@@ -1,0 +1,107 @@
+---
+title: "Prediction Assignment"
+author: "Zhong Lun"
+date: "22 March, 2015"
+output: html_document
+---
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+
+## Getting and clearning data
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+After loading the data, I clean up the data a bit:  
+1. only keep new_window == no observation because these seem to be aggregates of other columns  
+2. remove some columns: id, timestamps, subject name as they are not useful  
+3. remove all NA values 
+```{r warning=FALSE}
+library("dplyr")
+library("tidyr")
+library("caret")
+set.seed(168)
+
+pmlTraining <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""), dec=".")
+pmlTraining <- pmlTraining %>% filter(new_window == "no")
+pmlTraining <- pmlTraining[8:length(pmlTraining)]
+pmlTraining <- pmlTraining[, !apply(pmlTraining, 2, function(pmlTraining) any(is.na(pmlTraining)))]
+head(pmlTraining, 3)
+```
+
+## Modeling
+
+### Creating training set and test set
+After data cleaning, split the data into training set adn test set for cross validation:
+```{r warning=FALSE}
+training <- createDataPartition(y=pmlTraining$classe, p=0.6, list=FALSE)
+trainingset <- subset(pmlTraining[training,])
+testset <- subset(pmlTraining[-training,])
+dim(trainingset)
+dim(testset)
+```
+
+### Modeling consideration
+
+* Cross validation
+The default resampling scheme for the caret train function is bootstrap. I have used custom settings instead by setting the below trainControl. The out of sample error should be higher than the in sample error because the the model is based on the training set and will therefor most likely have a slightly worst performance on the testset. 
+* Variables selection
+First I made a model on a small part of the training set (for speed). Then I selected the 20 most important variables with varImp and run the model again. I repeated this, meanwhile balancing the accurancy and number of variables. With 10 variables I can get a good accuracy and also a good speed with the full training set.
+
+### Decision Tree Model
+```{r warning=FALSE}
+ctrl <- trainControl(method="repeatedcv", repeats=3)
+model_rpart <- train(classe ~ roll_belt + pitch_forearm + yaw_belt + roll_forearm + magnet_dumbbell_z +
+                         pitch_belt + magnet_dumbbell_y + magnet_dumbbell_x + accel_belt_z + magnet_belt_z, 
+                     data=trainingset, method="rpart", tuneLength=30, trControl=ctrl)
+model_rpart$finalModel
+```
+
+### Random Forest Model
+```{r}
+ctrl <- trainControl(method = "oob")
+model_rf <- train(classe ~ roll_belt + pitch_forearm + yaw_belt + roll_forearm + magnet_dumbbell_z + 
+                      pitch_belt + magnet_dumbbell_y + magnet_dumbbell_x + accel_belt_z + magnet_belt_z, 
+                  data=trainingset, method="rf", trControl=ctrl, tuneGrid=data.frame(.mtry = 2))
+model_rf
+```
+
+### Confusion matrix
+
+Decision Tree Model:
+```{r}
+predictions_rparttest <- predict(model_rpart, testset)
+confusionMatrix(predictions_rparttest, testset$classe)[3]
+```
+
+Random Forest Model: 
+```{r}
+predictions_rftest <- predict(model_rf, testset)
+confusionMatrix(predictions_rftest, testset$classe)[3]
+```
+
+Random Forest Model outperforms Decision Tree Model for accuracy. Therefore I choose Random Forest Model as the prediction model. 
+
+## Prediction
+Below is the final submission to generate the prediction on testing data. 
+```{r}
+final_model <- model_rf
+pml.submission <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""), dec=".")
+final_predictions <- predict(final_model, pml.submission)
+final_predictions
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+    }
+pml_write_files(final_predictions)
+```
+
+
